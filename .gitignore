@@ -1,0 +1,20 @@
+# Investigation data stays local
+graph/graph.db
+graph/review/
+graph/graph.html
+source-locator/data/*
+!source-locator/data/.gitkeep
+
+# Raw paid-content transcripts (compiled notes are kept)
+pasha/*.txt
+
+# Media and large files
+*.mp4
+*.mov
+papers/*.pdf
+
+# System / Python / secrets
+.DS_Store
+__pycache__/
+*.pyc
+.env

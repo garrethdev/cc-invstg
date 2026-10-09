@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connection Map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<style>
+:root{--bg:#0d1017;--panel:#151a24;--text:#e6e9ef;--muted:#8a93a6;--line:#2a3140;--accent:#5aa9ff}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,system-ui,sans-serif}
+#app{display:grid;grid-template-columns:250px 1fr 360px;height:100vh}
+#controls,#side{background:var(--panel);overflow:auto;padding:14px 16px}
+#controls{border-right:1px solid var(--line)} #side{border-left:1px solid var(--line)}
+#cy{height:100%;min-height:300px}
+h1{font-size:15px;margin:0 0 10px}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:16px 0 6px}
+label{display:block;margin:3px 0;cursor:pointer}
+input[type=text],input[type=number],select{width:100%;box-sizing:border-box;background:#0b0e14;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:2px 0}
+button{background:#1f2633;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:4px 4px 0 0;cursor:pointer}
+button:hover{border-color:var(--accent)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.edge{border-top:1px solid var(--line);padding:8px 0}
+.edge .t{color:var(--accent)} .edge .q{color:var(--muted);font-style:italic;margin-top:4px} .edge a{color:var(--muted)}
+.hint,#status{color:var(--muted);font-size:12px;margin-top:8px}
+@media (max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:auto 60vh auto}#controls,#side{border:0}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="controls">
+    <h1>Connection Map</h1>
+    <input type="text" id="q" placeholder="Search names…">
+    <h2>Nodes</h2><div id="ntypes"></div>
+    <h2>Relationships</h2><div id="etypes"></div>
+    <h2>Years</h2>
+    <input type="number" id="y0" placeholder="from"><input type="number" id="y1" placeholder="to">
+    <label><input type="checkbox" id="undated" checked> include undated</label>
+    <h2>Layout</h2>
+    <select id="layout"><option value="cose">force</option><option value="concentric">concentric</option><option value="breadthfirst">tree</option><option value="circle">circle</option></select>
+    <button id="relayout">Re-layout</button>
+    <h2>Path</h2>
+    <div class="hint">Click a node, then shift-click another.</div>
+    <button id="clearpath">Clear</button>
+    <div id="status"></div>
+  </div>
+  <div id="cy"></div>
+  <div id="side"><h1 id="sname">Select a node</h1><div id="smeta"></div><div id="sedges"></div></div>
+</div>
+<script>
+const DATA = __DATA__;
+const NCOL = {person:'#5aa9ff', org:'#f2b544', project:'#48d597', account:'#c084fc', place:'#f97b7b', event:'#ff9f43', document:'#9aa5b8'};
+const ntypes = [...new Set(DATA.nodes.map(n => n.type))], etypes = [...new Set(DATA.edges.map(e => e.type))];
+const deg = {}; DATA.edges.forEach(e => { deg[e.src] = (deg[e.src] || 0) + 1; deg[e.dst] = (deg[e.dst] || 0) + 1; });
+const yr = s => { const m = /^\d{4}/.exec(s || ''); return m ? +m[0] : null; };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: [
+    ...DATA.nodes.map(n => ({ data: { id: 'n' + n.id, label: n.name, type: n.type, deg: deg[n.id] || 0, raw: n } })),
+    ...DATA.edges.map(e => ({ data: { id: 'e' + e.id, source: 'n' + e.src, target: 'n' + e.dst, type: e.type, raw: e } })),
+  ],
+  style: [
+    { selector: 'node', style: { label: 'data(label)', color: '#e6e9ef', 'font-size': 10, 'text-valign': 'bottom', 'text-margin-y': 4,
+        'text-outline-color': '#0d1017', 'text-outline-width': 2,
+        'background-color': ele => NCOL[ele.data('type')] || '#999',
+        width: ele => 12 + Math.min(30, ele.data('deg') * 3), height: ele => 12 + Math.min(30, ele.data('deg') * 3) } },
+    { selector: 'edge', style: { width: 1.2, 'line-color': '#3a4356', 'target-arrow-color': '#3a4356', 'target-arrow-shape': 'triangle',
+        'arrow-scale': 0.7, 'curve-style': 'bezier', opacity: 0.8 } },
+    { selector: 'edge.hl', style: { 'line-color': '#5aa9ff', 'target-arrow-color': '#5aa9ff', width: 3, opacity: 1 } },
+    { selector: 'node.hl', style: { 'border-width': 3, 'border-color': '#fff' } },
+    { selector: '.dim', style: { opacity: 0.12 } },
+    { selector: '.hidden', style: { display: 'none' } },
+  ],
+  layout: { name: 'cose', animate: false, nodeRepulsion: 8000, idealEdgeLength: 90 },
+});
+
+function boxes(el, list, col) {
+  list.forEach(t => { const l = document.createElement('label');
+    l.innerHTML = `<input type="checkbox" checked data-t="${t}"> ${col ? `<span class="sw" style="background:${col[t] || '#999'}"></span>` : ''}${t}`;
+    el.appendChild(l); });
+}
+boxes(document.getElementById('ntypes'), ntypes, NCOL);
+boxes(document.getElementById('etypes'), etypes, null);
+const checked = el => new Set([...el.querySelectorAll('input:checked')].map(i => i.dataset.t));
+
+function applyFilters() {
+  const nt = checked(document.getElementById('ntypes')), et = checked(document.getElementById('etypes'));
+  const y0 = +document.getElementById('y0').value || null, y1 = +document.getElementById('y1').value || null;
+  const und = document.getElementById('undated').checked;
+  cy.batch(() => {
+    cy.edges().forEach(e => { const r = e.data('raw'); let ok = et.has(r.type);
+      if (ok && (y0 || y1)) { const s = yr(r.start), t = yr(r.end);
+        if (s == null && t == null) ok = und; else { const a = s ?? t, b = t ?? s; if (y0 && b < y0) ok = false; if (y1 && a > y1) ok = false; } }
+      e.toggleClass('hidden', !ok); });
+    cy.nodes().forEach(n => { const ok = nt.has(n.data('type')) && n.connectedEdges().some(e => !e.hasClass('hidden')); n.toggleClass('hidden', !ok); });
+    cy.edges().forEach(e => { if (e.source().hasClass('hidden') || e.target().hasClass('hidden')) e.addClass('hidden'); });
+  });
+  status();
+}
+['ntypes', 'etypes'].forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
+['y0', 'y1', 'undated'].forEach(id => document.getElementById(id).addEventListener('input', applyFilters));
+function status(msg) {
+  const v = cy.nodes().filter(n => !n.hasClass('hidden')).length, e = cy.edges().filter(x => !x.hasClass('hidden')).length;
+  document.getElementById('status').textContent = msg || `${v} of ${DATA.nodes.length} nodes, ${e} of ${DATA.edges.length} edges shown`;
+}
+status();
+document.getElementById('relayout').onclick = () =>
+  cy.elements().not('.hidden').layout({ name: document.getElementById('layout').value, animate: true, nodeRepulsion: 8000, idealEdgeLength: 90 }).run();
+
+document.getElementById('q').addEventListener('input', ev => {
+  const q = ev.target.value.trim().toLowerCase(); cy.elements().removeClass('dim'); if (!q) return;
+  const hits = cy.nodes().filter(n => { const r = n.data('raw'); return (r.name + ' ' + (r.aliases || '')).toLowerCase().includes(q); });
+  cy.elements().addClass('dim'); hits.removeClass('dim'); hits.connectedEdges().removeClass('dim');
+  if (hits.length) cy.animate({ center: { eles: hits } }, { duration: 300 });
+});
+
+function show(n) {
+  const r = n.data('raw');
+  document.getElementById('sname').innerHTML = `<span class="sw" style="background:${NCOL[r.type] || '#999'}"></span>${esc(r.name)}`;
+  document.getElementById('smeta').innerHTML = `<div class="hint">${r.type}${r.aliases ? ' · also: ' + esc(r.aliases.split('|').join(', ')) : ''}</div>${r.notes ? `<p>${esc(r.notes)}</p>` : ''}`;
+  const rows = n.connectedEdges().map(e => { const d = e.data('raw'); const out = e.source().id() === n.id();
+    const other = out ? e.target() : e.source(); const when = (d.start || d.end) ? ` ${d.start || '?'}–${d.end || '?'}` : '';
+    return `<div class="edge"><div><span class="t">${d.type}${d.role ? ' (' + esc(d.role) + ')' : ''}</span>${when} ${out ? '→' : '←'} <b>${esc(other.data('label'))}</b></div>` +
+      (d.quote ? `<div class="q">“${esc(d.quote)}”</div>` : '') +
+      (d.source ? `<div class="hint"><a href="${esc(d.source)}">${esc(d.source.split('/').pop())}</a> · confidence ${d.confidence}</div>` : '') + `</div>`; });
+  document.getElementById('sedges').innerHTML = rows.join('') || '<div class="hint">No relationships.</div>';
+}
+
+let first = null;
+cy.on('tap', 'node', ev => { const n = ev.target; show(n);
+  if (ev.originalEvent.shiftKey && first && first.id() !== n.id()) {
+    cy.elements().removeClass('hl');
+    const p = cy.elements().not('.hidden').dijkstra({ root: first, directed: false }).pathTo(n);
+    if (p.length) { p.addClass('hl'); status('Path: ' + p.nodes().map(x => x.data('label')).join(' → ')); } else status('No path with current filters');
+  } else { first = n; cy.elements().removeClass('hl'); n.addClass('hl'); }
+});
+cy.on('tap', ev => { if (ev.target === cy) { cy.elements().removeClass('hl'); first = null; } });
+document.getElementById('clearpath').onclick = () => { cy.elements().removeClass('hl dim'); first = null; status(); };
+</script>
+</body>
+</html>
